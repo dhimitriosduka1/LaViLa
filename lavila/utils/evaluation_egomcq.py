@@ -20,6 +20,6 @@ def egomcq_accuracy_metrics(preds, labels, types):
                 if pred_.item() == label.item():
                     correct += 1
                 total += 1
-        accuracy = correct/total
+        accuracy = correct / total
         metrics[group_i] = accuracy * 100
     return metrics

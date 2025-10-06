@@ -16,21 +16,29 @@ from .distributed_utils import gather_from_all
 
 
 def gather_features(
-        image_features,
-        text_features,
-        local_loss=False,
-        gather_with_grad=False,
-        rank=0,
-        world_size=1,
+    image_features,
+    text_features,
+    local_loss=False,
+    gather_with_grad=False,
+    rank=0,
+    world_size=1,
 ):
     # Adapted from: https://github.com/mlfoundations/open_clip/blob/main/src/open_clip/loss.py
     # We gather tensors from all gpus
     if gather_with_grad:
-        all_image_features = torch.cat(torch.distributed.nn.all_gather(image_features), dim=0)
-        all_text_features = torch.cat(torch.distributed.nn.all_gather(text_features), dim=0)
+        all_image_features = torch.cat(
+            torch.distributed.nn.all_gather(image_features), dim=0
+        )
+        all_text_features = torch.cat(
+            torch.distributed.nn.all_gather(text_features), dim=0
+        )
     else:
-        gathered_image_features = [torch.zeros_like(image_features) for _ in range(world_size)]
-        gathered_text_features = [torch.zeros_like(text_features) for _ in range(world_size)]
+        gathered_image_features = [
+            torch.zeros_like(image_features) for _ in range(world_size)
+        ]
+        gathered_text_features = [
+            torch.zeros_like(text_features) for _ in range(world_size)
+        ]
         dist.all_gather(gathered_image_features, image_features)
         dist.all_gather(gathered_text_features, text_features)
         if not local_loss:
@@ -46,13 +54,13 @@ def gather_features(
 class CLIPLoss(nn.Module):
 
     def __init__(
-            self,
-            use_vissl=False,
-            local_loss=False,
-            gather_with_grad=False,
-            cache_labels=False,
-            rank=0,
-            world_size=1,
+        self,
+        use_vissl=False,
+        local_loss=False,
+        gather_with_grad=False,
+        cache_labels=False,
+        rank=0,
+        world_size=1,
     ):
         super().__init__()
         self.use_vissl = use_vissl
@@ -67,26 +75,37 @@ class CLIPLoss(nn.Module):
         self.labels = {}
 
     def forward(self, outputs):
-        image_features = outputs['image_embed']
-        text_features = outputs['text_embed']
-        logit_scale = outputs['logit_scale']
+        image_features = outputs["image_embed"]
+        text_features = outputs["text_embed"]
+        logit_scale = outputs["logit_scale"]
         device = image_features.device
         if self.world_size > 1:
             if self.use_vissl:
                 all_image_features = gather_from_all(image_features)
                 all_text_features = gather_from_all(text_features)
-                logits_per_image = logit_scale * all_image_features @ all_text_features.T
+                logits_per_image = (
+                    logit_scale * all_image_features @ all_text_features.T
+                )
                 logits_per_text = logits_per_image.T
             else:
                 all_image_features, all_text_features = gather_features(
-                    image_features, text_features,
-                    self.local_loss, self.gather_with_grad, self.rank, self.world_size)
+                    image_features,
+                    text_features,
+                    self.local_loss,
+                    self.gather_with_grad,
+                    self.rank,
+                    self.world_size,
+                )
 
                 if self.local_loss:
-                    logits_per_image = logit_scale * image_features @ all_text_features.T
+                    logits_per_image = (
+                        logit_scale * image_features @ all_text_features.T
+                    )
                     logits_per_text = logit_scale * text_features @ all_image_features.T
                 else:
-                    logits_per_image = logit_scale * all_image_features @ all_text_features.T
+                    logits_per_image = (
+                        logit_scale * all_image_features @ all_text_features.T
+                    )
                     logits_per_text = logits_per_image.T
         else:
             logits_per_image = logit_scale * image_features @ text_features.T
@@ -105,9 +124,9 @@ class CLIPLoss(nn.Module):
             labels = self.labels[device]
 
         loss = (
-            F.cross_entropy(logits_per_image, labels) +
-            F.cross_entropy(logits_per_text, labels)
-            ) / 2
+            F.cross_entropy(logits_per_image, labels)
+            + F.cross_entropy(logits_per_text, labels)
+        ) / 2
 
         # compute accuracy
         with torch.no_grad():
@@ -115,21 +134,21 @@ class CLIPLoss(nn.Module):
             correct = pred.eq(labels).sum()
             acc = 100 * correct / logits_per_image.size(0)
 
-        return {'loss': loss, 'clip_loss': loss, 'clip_acc': acc}
+        return {"loss": loss, "clip_loss": loss, "clip_acc": acc}
 
 
 class SSLCLIPLoss(nn.Module):
 
     def __init__(
-            self,
-            use_vissl=False,
-            local_loss=False,
-            gather_with_grad=False,
-            cache_labels=False,
-            rank=0,
-            world_size=1,
-            scale_init=0.08,
-            freeze_scale=False,
+        self,
+        use_vissl=False,
+        local_loss=False,
+        gather_with_grad=False,
+        cache_labels=False,
+        rank=0,
+        world_size=1,
+        scale_init=0.08,
+        freeze_scale=False,
     ):
         super().__init__()
         self.use_vissl = use_vissl
@@ -147,9 +166,9 @@ class SSLCLIPLoss(nn.Module):
         self.labels = {}
 
     def forward(self, outputs, gt_indicators):
-        image_features = outputs['image_embed']
-        text_features = outputs['text_embed']
-        logit_scale = outputs['logit_scale']
+        image_features = outputs["image_embed"]
+        text_features = outputs["text_embed"]
+        logit_scale = outputs["logit_scale"]
         logit_scale_pseudo = self.logit_scale_pseudo.exp()
         device = image_features.device
         if self.world_size > 1:
@@ -158,12 +177,19 @@ class SSLCLIPLoss(nn.Module):
                 all_text_features = gather_from_all(text_features)
                 all_gt_indicators = gather_from_all(gt_indicators)
                 num = all_gt_indicators.shape[0]
-                mask = all_gt_indicators.repeat(num, 1) + all_gt_indicators.repeat(num, 1).T
+                mask = (
+                    all_gt_indicators.repeat(num, 1)
+                    + all_gt_indicators.repeat(num, 1).T
+                )
                 logit_scale_mat = torch.ones((num, num), device=device)
                 logit_scale_mat[mask == 0] = logit_scale_pseudo
-                logit_scale_mat[mask == 1] = torch.sqrt(logit_scale_pseudo * logit_scale)
+                logit_scale_mat[mask == 1] = torch.sqrt(
+                    logit_scale_pseudo * logit_scale
+                )
                 logit_scale_mat[mask == 2] = logit_scale
-                logits_per_image = logit_scale_mat * (all_image_features @ all_text_features.T)
+                logits_per_image = logit_scale_mat * (
+                    all_image_features @ all_text_features.T
+                )
                 logits_per_text = logits_per_image.T
             else:
                 raise NotImplementedError
@@ -191,9 +217,9 @@ class SSLCLIPLoss(nn.Module):
             labels = self.labels[device]
 
         loss = (
-            F.cross_entropy(logits_per_image, labels) +
-            F.cross_entropy(logits_per_text, labels)
-            ) / 2
+            F.cross_entropy(logits_per_image, labels)
+            + F.cross_entropy(logits_per_text, labels)
+        ) / 2
 
         # compute accuracy
         with torch.no_grad():
@@ -212,8 +238,13 @@ class SSLCLIPLoss(nn.Module):
             acc_pseudo = 100 * correct_pseudo / num_pseudo
 
         return {
-            'loss': loss, 'clip_loss': loss, 'num_gt': torch.tensor([num_gt]), 'num_pseudo': torch.tensor([num_pseudo]),
-            'clip_acc': acc, 'clip_acc_gt': acc_gt, 'clip_acc_pseudo': acc_pseudo
+            "loss": loss,
+            "clip_loss": loss,
+            "num_gt": torch.tensor([num_gt]),
+            "num_pseudo": torch.tensor([num_pseudo]),
+            "clip_acc": acc,
+            "clip_acc_gt": acc_gt,
+            "clip_acc_pseudo": acc_pseudo,
         }
 
 
@@ -225,15 +256,17 @@ class CaptionLoss(nn.Module):
         self.pad_id = tokenizer.pad_token_id
 
     def forward(self, outputs):
-        logits = outputs['text_tokens_logits']
-        labels = outputs['labels']
+        logits = outputs["text_tokens_logits"]
+        labels = outputs["labels"]
         # loss = F.cross_entropy(logits, labels, ignore_index=self.pad_id)
-        loss = F.cross_entropy(logits, labels, ignore_index=self.pad_id, reduction='none')
+        loss = F.cross_entropy(
+            logits, labels, ignore_index=self.pad_id, reduction="none"
+        )
 
         # compute accuracy
         with torch.no_grad():
-            correct = 0.
-            total = 0.
+            correct = 0.0
+            total = 0.0
             ppls = []
             for i in range(logits.size(0)):
                 pred = torch.argmax(logits[i], dim=0)
@@ -250,7 +283,12 @@ class CaptionLoss(nn.Module):
                 #         self.tokenizer.tokenizer.convert_ids_to_tokens(labels[i, :sep_pos]),
                 #     ))
             acc = 100 * correct / (total + 1e-8)
-        return {'loss': loss.mean(), 'caption_loss': loss.mean(), 'caption_acc': acc, 'ppl': torch.tensor(ppls).mean()}
+        return {
+            "loss": loss.mean(),
+            "caption_loss": loss.mean(),
+            "caption_acc": acc,
+            "ppl": torch.tensor(ppls).mean(),
+        }
 
 
 def sim_matrix(a, b, eps=1e-8):
@@ -273,8 +311,8 @@ class MaxMarginRankingLoss(nn.Module):
         self.margin = margin
 
     def forward(self, outputs, weight=None):
-        image_features = outputs['image_embed']
-        text_features = outputs['text_embed']
+        image_features = outputs["image_embed"]
+        text_features = outputs["text_embed"]
 
         all_image_features = gather_from_all(image_features)
         all_text_features = gather_from_all(text_features)
@@ -306,10 +344,7 @@ class MaxMarginRankingLoss(nn.Module):
             x2_ = torch.index_select(x2, dim=0, index=keep_idx)
             max_margin = F.relu(self.margin - (x1_ - x2_))
 
-        return {
-            'loss': max_margin.mean(),
-            'max_margin_loss': max_margin.mean()
-        }
+        return {"loss": max_margin.mean(), "max_margin_loss": max_margin.mean()}
 
 
 class AdaptiveMaxMarginRankingLoss(nn.Module):
@@ -321,8 +356,8 @@ class AdaptiveMaxMarginRankingLoss(nn.Module):
         self.margin = margin
 
     def forward(self, outputs, weight=None):
-        image_features = outputs['image_embed']
-        text_features = outputs['text_embed']
+        image_features = outputs["image_embed"]
+        text_features = outputs["text_embed"]
 
         all_image_features = gather_from_all(image_features)
         all_text_features = gather_from_all(text_features)
@@ -361,7 +396,4 @@ class AdaptiveMaxMarginRankingLoss(nn.Module):
             x2_ = torch.index_select(x2, dim=0, index=keep_idx)
             max_margin = F.relu(w1_ * self.margin - (x1_ - x2_))
 
-        return {
-            'loss': max_margin.mean(),
-            'max_margin_loss': max_margin.mean()
-        }
+        return {"loss": max_margin.mean(), "max_margin_loss": max_margin.mean()}
