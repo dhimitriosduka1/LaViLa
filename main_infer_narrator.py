@@ -21,8 +21,20 @@ from lavila.data.video_transforms import Permute
 from lavila.models import models
 from lavila.utils.preprocess import generate_tokenizer
 from lavila.utils import distributed as dist_utils
-from eval_narrator import decode_one
 
+def decode_one(generated_ids, tokenizer):
+    # get the index of <EOS>
+    if tokenizer.eos_token_id == tokenizer.bos_token_id:
+        if tokenizer.eos_token_id in generated_ids[1:].tolist():
+            eos_id = generated_ids[1:].tolist().index(tokenizer.eos_token_id) + 1
+        else:
+            eos_id = len(generated_ids.tolist()) - 1
+    elif tokenizer.eos_token_id in generated_ids.tolist():
+        eos_id = generated_ids.tolist().index(tokenizer.eos_token_id)
+    else:
+        eos_id = len(generated_ids.tolist()) - 1
+    generated_text_str = tokenizer.tokenizer.decode(generated_ids[1:eos_id].tolist())
+    return generated_text_str
 
 class IndexedDataset(torch.utils.data.Dataset):
     def __init__(self, dataset):
